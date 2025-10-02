@@ -61,46 +61,77 @@ async function sendSms({ to, text }) {
 // --- health check ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+const STOP_WORDS  = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
+const START_WORDS = ['START', 'UNSTOP', 'YES'];
+
+// --- Inbound SMS webhook (Infobip -> you) ---
+// --- health check ---
+app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// --- keywords for compliance ---
+const STOP_WORDS  = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
+const START_WORDS = ['START', 'UNSTOP', 'YES'];
+
 // --- Inbound SMS webhook (Infobip -> you) ---
 app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
-  console.log("\n=== Inbound webhook @", new Date().toISOString(), "===");
-  console.log(JSON.stringify(req.body, null, 2));
-
   try {
-    // Infobip may send 'results' or 'messages' (and occasionally variants)
+    // Handle common Infobip MO payload shapes
     const msg =
       req.body?.results?.[0] ||
       req.body?.messages?.[0] ||
       req.body?.inboundMessage ||
-      null;
+      req.body;
 
-    if (msg) {
-      const from =
-        msg.from ||
-        msg?.sender?.phoneNumber ||
-        msg?.sender ||
-        msg?.msisdn;
+    const from =
+      msg?.from ||
+      msg?.sender?.phoneNumber ||
+      msg?.sender ||
+      msg?.msisdn ||
+      msg?.message?.from;
 
-      const raw = (msg.cleanText ?? msg.text ?? "").toString();
-      const text = raw.trim().toUpperCase().replace(/\s+/g, " ");
+    const raw =
+      (msg?.cleanText ??
+       msg?.text ??
+       msg?.message?.text ??
+       "").toString();
 
-      if (text.startsWith("HELP")) {
-        console.log("HELP detected from", from);
-        await sendSms({
-          to: from,
-          text:
-            "Elite Kutz: For help with SMS visit updates, call (972) 673-0114 or email support@elitekutzkiosk.com. Reply STOP to opt out, START to rejoin."
-        });
-        console.log("HELP reply queued to", from);
-      }
+    const norm = raw.trim().toUpperCase().replace(/\s+/g, " ");
+
+    if (STOP_WORDS.includes(norm)) {
+      console.log(`STOP received from ${from}; honoring opt-out (no reply).`);
+      return res.status(200).json({ ok: true });
     }
-  } catch (e) {
-    console.error("Inbound handler error:", e);
-    // still ack below
-  }
 
-  // Always ack quickly (prevents Infobip retries)
-  res.sendStatus(200);
+    if (START_WORDS.includes(norm)) {
+      console.log(`START received from ${from}; sending re-opt confirmation.`);
+      await sendSms({
+        to: from,
+        text: "You are opted in. Reply HELP for info or STOP to opt out anytime."
+      });
+      return res.json({ ok: true });
+    }
+
+    if (norm === "HELP") {
+      console.log(`HELP detected from ${from}`);
+      await sendSms({
+        to: from,
+        text:
+          "Elite Kutz: For help with SMS visit updates, call (972) 673-0114 or email support@elitekutzkiosk.com. Reply STOP to opt out, START to rejoin."
+      });
+      return res.json({ ok: true });
+    }
+
+    // Default friendly auto-reply (optional)
+    await sendSms({
+      to: from,
+      text: "Thanks! Reply HELP for info or STOP to opt out."
+    });
+    return res.json({ ok: true });
+  } catch (err) {
+    console.error("Inbound handler error:", err);
+    // Still ack so Infobip doesn’t retry forever
+    return res.status(200).json({ ok: true });
+  }
 });
 
 // --- Kiosk-triggered endpoints (you -> Infobip) ---
