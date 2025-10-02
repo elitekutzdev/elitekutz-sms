@@ -61,6 +61,8 @@ async function sendSms({ to, text }) {
 // --- health check ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
+app.get('/', (_req, res) => res.send('OK'));
+
 // --- keywords for compliance ---
 const STOP_WORDS  = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
 const START_WORDS = ['START', 'UNSTOP', 'YES'];
@@ -157,16 +159,5 @@ app.post("/api/send-assignment", async (req, res) => {
   }
 });
 
-// --- simple test endpoint to verify outbound without kiosk ---
-app.post("/api/test-send", async (req, res) => {
-  try {
-    const { to, text = "Elite Kutz test message." } = req.body || {};
-    if (!to) return res.status(400).json({ ok: false, error: "Missing to" });
-    const result = await sendSms({ to, text });
-    res.json({ ok: true, result });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
 
 app.listen(PORT, () => console.log(`Webhook listening on :${PORT}`));
