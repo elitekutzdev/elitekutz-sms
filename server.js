@@ -61,13 +61,6 @@ async function sendSms({ to, text }) {
 // --- health check ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-const STOP_WORDS  = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
-const START_WORDS = ['START', 'UNSTOP', 'YES'];
-
-// --- Inbound SMS webhook (Infobip -> you) ---
-// --- health check ---
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
 // --- keywords for compliance ---
 const STOP_WORDS  = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
 const START_WORDS = ['START', 'UNSTOP', 'YES'];
