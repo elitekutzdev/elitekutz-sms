@@ -61,11 +61,21 @@ async function sendSms({ to, text }) {
 // --- health check ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
 
-app.get('/', (_req, res) => res.send('OK'));
+app.get("/", (_req, res) => res.send("OK"));
 
 // --- keywords for compliance ---
-const STOP_WORDS  = ['STOP', 'STOPALL', 'UNSUBSCRIBE', 'CANCEL', 'END', 'QUIT'];
-const START_WORDS = ['START', 'UNSTOP', 'YES'];
+const STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
+const START_WORDS = ["START", "UNSTOP", "YES"];
+
+// --- kiosk auth (ADD THIS) ---
+const KIOSK_TOKEN = process.env.KIOSK_TOKEN; // set this in Render → Environment
+function requireKioskAuth(req, res, next) {
+  const auth = req.headers["authorization"] || "";
+  if (!KIOSK_TOKEN || auth !== `Bearer ${KIOSK_TOKEN}`) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
+  next();
+}
 
 // --- Inbound SMS webhook (Infobip -> you) ---
 app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
@@ -130,7 +140,7 @@ app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
 });
 
 // --- Kiosk-triggered endpoints (you -> Infobip) ---
-app.post("/api/send-ready", async (req, res) => {
+app.post("/api/send-ready", requireKioskAuth, async (req, res) => {
   try {
     const { to, barber } = req.body || {};
     if (!to || !barber) return res.status(400).json({ ok: false, error: "Missing to/barber" });
@@ -144,7 +154,7 @@ app.post("/api/send-ready", async (req, res) => {
   }
 });
 
-app.post("/api/send-assignment", async (req, res) => {
+app.post("/api/send-assignment", requireKioskAuth, async (req, res) => {
   try {
     const { to, client, barber, position } = req.body || {};
     if (!to || !client || !barber) return res.status(400).json({ ok: false, error: "Missing to/client/barber" });
