@@ -30,12 +30,24 @@ app.use((req, res, next) => {
 });
 
 // --- ENV ---
-const BASE_URL = process.env.INFOBIP_BASE_URL;   // e.g. https://xxxx.api.infobip.com
-const API_KEY  = process.env.INFOBIP_API_KEY;    // MUST start with "App "
-const SENDER   = process.env.INFOBIP_SENDER;     // e.g. +18333586148
+const BASE_URL = process.env.INFOBIP_BASE_URL;
+const API_KEY  = process.env.INFOBIP_API_KEY;
+const SENDER   = process.env.INFOBIP_SENDER;
 const PORT     = process.env.PORT || 3000;
-// --- BARBER PHONE → NAME map (from env) ---
-const BARBER_NUMBERS = (process.env.BARBER_NUMBERS || "")
+
+/* ===== REPLACEMENT STARTS HERE ===== */
+// Normalize US numbers to +E.164 so lookups always match
+function normalizeUS(phone) {
+  if (!phone) return "";
+  const digits = String(phone).replace(/\D/g, "");
+  if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
+  if (digits.length === 10) return "+1" + digits;
+  return "+" + digits; // fallback
+}
+
+// Parse raw env list and then normalize the keys
+// Example BARBER_NUMBERS env: +12149919940:Mike,+12146296917:Red
+const RAW_BARBER_NUMBERS = (process.env.BARBER_NUMBERS || "")
   .split(",")
   .map(s => s.trim())
   .filter(Boolean)
@@ -45,6 +57,11 @@ const BARBER_NUMBERS = (process.env.BARBER_NUMBERS || "")
     return acc;
   }, {});
 
+const BARBER_NUMBERS = Object.fromEntries(
+  Object.entries(RAW_BARBER_NUMBERS).map(([k, v]) => [normalizeUS(k), v])
+);
+/* ===== REPLACEMENT ENDS HERE ===== */
+
 // sanity checks (prints once at boot so mistakes are obvious)
 (function validateEnv() {
   if (!BASE_URL)  console.warn("[ENV] INFOBIP_BASE_URL is missing");
@@ -53,8 +70,10 @@ const BARBER_NUMBERS = (process.env.BARBER_NUMBERS || "")
     console.warn('[ENV] INFOBIP_API_KEY should start with "App " (e.g., App xxxxx)');
   }
   if (!SENDER)    console.warn("[ENV] INFOBIP_SENDER is missing");
-if (!process.env.BARBER_NUMBERS) console.warn("[ENV] BARBER_NUMBERS is missing (no barber SMS control)");
+  if (!process.env.BARBER_NUMBERS)
+    console.warn("[ENV] BARBER_NUMBERS is missing (no barber SMS control)");
 })();
+
 // ======= TEMPLATES (new keys) =======
 const TEMPLATES = {
   // ---------- SPECIFIC_BARBER_REQUEST ----------
@@ -455,34 +474,16 @@ app.get("/", (_req, res) => res.send("OK"));
 const STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
 const START_WORDS = ["START", "UNSTOP", "YES"];
 
-// --- kiosk auth (ADD THIS) ---
-const KIOSK_TOKEN = process.env.KIOSK_TOKEN;
-
-function requireKioskAuth(req, res, next) {
-  const got = String(req.headers["authorization"] || "").trim();
-  const expected = ("Bearer " + String(KIOSK_TOKEN || "")).trim();
-
-  // Log both (partially masked) so we can see differences
-  const mask = s => (s.length <= 10 ? s : s.slice(0,4) + "…" + s.slice(-4));
-  if (!KIOSK_TOKEN) {
-    console.warn("[AUTH] KIOSK_TOKEN not set; skipping auth (DEV MODE).");
-    return next();
-  }
-  if (got !== expected) {
-    console.warn("[AUTH] MISMATCH");
-    console.warn("  got     :", JSON.stringify(got), "len:", got.length, "mask:", mask(got));
-    console.warn("  expected:", JSON.stringify(expected), "len:", expected.length, "mask:", mask(expected));
-    return res.status(401).json({ ok: false, error: "Unauthorized" });
-  }
-  return next();
-}
 // --- Notify kiosk (PHP proxy) to flip a barber's status ---
 async function notifyKioskBarberStatus(name, status) {
   try {
     const url = "https://elitekutzkiosk.com/kiosk-api.php?endpoint=barber_status";
     const r = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + String(process.env.KIOSK_TOKEN || "")
+      },
       body: JSON.stringify({ name, status })
     });
     if (!r.ok) {
@@ -518,6 +519,7 @@ app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
 
     const norm = raw.trim().toUpperCase().replace(/\s+/g, " ");
 
+    // Compliance keywords
     if (STOP_WORDS.includes(norm)) {
       console.log(`STOP received from ${from}; honoring opt-out (no reply).`);
       return res.status(200).json({ ok: true });
@@ -542,24 +544,43 @@ app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
       return res.json({ ok: true });
     }
 
-    // >>>>>>>>>>>>>>>>>>>>>>>  PASTE THIS BLOCK HERE  <<<<<<<<<<<<<<<<<<<<<<<
-// --- BARBER AVAILABILITY VIA SMS ---
-if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
-  const barberName = BARBER_NUMBERS[from];
-  if (!barberName) {
-    await sendSms({ to: from, text: "Elite Kutz: This number is not recognized for barber controls." });
+    // --- BARBER AVAILABILITY VIA SMS ---
+    if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
+      const fromNormalized = normalizeUS(from);
+      const barberName = BARBER_NUMBERS[fromNormalized];
+
+      if (!barberName) {
+        await sendSms({
+          to: from,
+          text: "Elite Kutz: This number is not recognized for barber controls."
+        });
+        return res.json({ ok: true });
+      }
+
+      const status = (norm === "AVAILABLE") ? "available" : "unavailable";
+      await notifyKioskBarberStatus(barberName, status);
+
+      await sendSms({
+        to: from,
+        text: `Elite Kutz: ${barberName} set to ${status.toUpperCase()}.`
+      });
+
+      return res.json({ ok: true });
+    }
+
+    // Default friendly auto-reply (keep only one)
+    await sendSms({
+      to: from,
+      text: "Thanks! Reply HELP for info or STOP to opt out."
+    });
     return res.json({ ok: true });
+
+  } catch (err) {
+    console.error("Inbound handler error:", err);
+    // Still ack so Infobip doesn’t retry forever
+    return res.status(200).json({ ok: true });
   }
-
-  const status = (norm === "AVAILABLE") ? "available" : "unavailable";
-  await notifyKioskBarberStatus(barberName, status);
-  await sendSms({ to: from, text: `Elite Kutz: ${barberName} set to ${status.toUpperCase()}.` });
-  return res.json({ ok: true });
-}
-
-// ---- default auto-reply (optional) ----
-await sendSms({ to: from, text: "Thanks! Reply HELP for info or STOP to opt out." });
-return res.json({ ok: true });
+});
 
     // >>>>>>>>>>>>>>>>>>>>>>>  END OF PASTED BLOCK  <<<<<<<<<<<<<<<<<<<<<<<<
 
