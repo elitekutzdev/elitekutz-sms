@@ -42,15 +42,11 @@ function normalizeUS(phone) {
   const digits = String(phone).replace(/\D/g, "");
   if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
   if (digits.length === 10) return "+1" + digits;
-  return "+" + digits; // fallback
+  return "+" + digits;
 }
 
-// Parse raw env list and then normalize the keys
-// Example BARBER_NUMBERS env: +12149919940:Mike,+12146296917:Red
 const RAW_BARBER_NUMBERS = (process.env.BARBER_NUMBERS || "")
-  .split(",")
-  .map(s => s.trim())
-  .filter(Boolean)
+  .split(",").map(s => s.trim()).filter(Boolean)
   .reduce((acc, pair) => {
     const [phone, name] = pair.split(":").map(x => (x || "").trim());
     if (phone && name) acc[phone] = name;
@@ -60,6 +56,7 @@ const RAW_BARBER_NUMBERS = (process.env.BARBER_NUMBERS || "")
 const BARBER_NUMBERS = Object.fromEntries(
   Object.entries(RAW_BARBER_NUMBERS).map(([k, v]) => [normalizeUS(k), v])
 );
+
 /* ===== REPLACEMENT ENDS HERE ===== */
 
 // sanity checks (prints once at boot so mistakes are obvious)
@@ -467,12 +464,23 @@ async function sendSms({ to, text }) {
 
 // --- health check ---
 app.get("/health", (_req, res) => res.json({ ok: true }));
-
 app.get("/", (_req, res) => res.send("OK"));
 
 // --- keywords for compliance ---
 const STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
 const START_WORDS = ["START", "UNSTOP", "YES"];
+
+/* ===== PASTE THIS BLOCK HERE ===== */
+const KIOSK_TOKEN = process.env.KIOSK_TOKEN;
+
+function requireKioskAuth(req, res, next) {
+  const got = String(req.headers["authorization"] || "").trim();
+  const expected = ("Bearer " + String(KIOSK_TOKEN || "")).trim();
+  if (!KIOSK_TOKEN) return next(); // dev mode: skip if not set
+  if (got !== expected) return res.status(401).json({ ok: false, error: "Unauthorized" });
+  next();
+}
+/* ===== END PASTE ===== */
 
 // --- Notify kiosk (PHP proxy) to flip a barber's status ---
 async function notifyKioskBarberStatus(name, status) {
@@ -494,6 +502,7 @@ async function notifyKioskBarberStatus(name, status) {
   }
 }
 
+// --- Inbound SMS webhook (Infobip -> you) ---
 // --- Inbound SMS webhook (Infobip -> you) ---
 app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
   try {
@@ -575,21 +584,6 @@ app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
     });
     return res.json({ ok: true });
 
-  } catch (err) {
-    console.error("Inbound handler error:", err);
-    // Still ack so Infobip doesn’t retry forever
-    return res.status(200).json({ ok: true });
-  }
-});
-
-    // >>>>>>>>>>>>>>>>>>>>>>>  END OF PASTED BLOCK  <<<<<<<<<<<<<<<<<<<<<<<<
-
-    // Default friendly auto-reply (optional)
-    await sendSms({
-      to: from,
-      text: "Thanks! Reply HELP for info or STOP to opt out."
-    });
-    return res.json({ ok: true });
   } catch (err) {
     console.error("Inbound handler error:", err);
     // Still ack so Infobip doesn’t retry forever
