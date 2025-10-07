@@ -466,6 +466,10 @@ async function sendSms({ to, text }) {
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("OK"));
 
+const BUILD_TAG = "flip-route-" + new Date().toISOString();
+app.get("/_ping", (_req, res) => res.send(BUILD_TAG));
+console.log("Booting build:", BUILD_TAG);
+
 // --- keywords for compliance ---
 const STOP_WORDS  = ["STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"];
 const START_WORDS = ["START", "UNSTOP", "YES"];
@@ -484,25 +488,51 @@ function requireKioskAuth(req, res, next) {
 
 // --- Notify kiosk (PHP proxy) to flip a barber's status ---
 async function notifyKioskBarberStatus(name, status) {
+  const url = "https://elitekutzkiosk.com/kiosk-api.php?endpoint=barber_status";
+  const auth = "Bearer " + String(process.env.KIOSK_TOKEN || "");
   try {
-    const url = "https://elitekutzkiosk.com/kiosk-api.php?endpoint=barber_status";
+    console.log("notifyKioskBarberStatus ->", { name, status, url });
+
     const r = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": "Bearer " + String(process.env.KIOSK_TOKEN || "")
+        "Authorization": auth
       },
       body: JSON.stringify({ name, status })
     });
+
+    const text = await r.text(); // read body either way
     if (!r.ok) {
-      console.warn("notifyKioskBarberStatus failed", r.status, await r.text());
+      console.warn("notifyKioskBarberStatus FAIL", r.status, text);
+      return { ok: false, status: r.status, body: text };
     }
+
+    console.log("notifyKioskBarberStatus OK", text);
+    return { ok: true, status: r.status, body: text };
   } catch (e) {
-    console.warn("notifyKioskBarberStatus error", e);
+    console.warn("notifyKioskBarberStatus ERROR", e);
+    return { ok: false, error: String(e) };
   }
 }
+// Quick debug endpoint: /_flip?name=red&status=available
+app.get("/_flip", async (req, res) => {
+  const got = String(req.headers["authorization"] || "");
+  const expected = "Bearer " + String(process.env.KIOSK_TOKEN || "");
+  if (!process.env.KIOSK_TOKEN || got !== expected) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
 
-// --- Inbound SMS webhook (Infobip -> you) ---
+  const name = String(req.query.name || "").trim();         // e.g., "red"
+  const status = String(req.query.status || "").trim();     // "available" | "unavailable"
+  if (!name || !/^(available|unavailable)$/i.test(status)) {
+    return res.status(400).json({ ok: false, error: "Use ?name=red&status=available|unavailable" });
+  }
+
+  const out = await notifyKioskBarberStatus(name, status.toLowerCase());
+  return res.json({ ok: true, flip: out });
+});
+
 // --- Inbound SMS webhook (Infobip -> you) ---
 app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
   try {
@@ -553,29 +583,26 @@ app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
       return res.json({ ok: true });
     }
 
-    // --- BARBER AVAILABILITY VIA SMS ---
-    if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
-      const fromNormalized = normalizeUS(from);
-      const barberName = BARBER_NUMBERS[fromNormalized];
+// --- BARBER AVAILABILITY VIA SMS ---
+if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
+  const fromNormalized = normalizeUS(from);
+  const barberName = BARBER_NUMBERS[fromNormalized];
 
-      if (!barberName) {
-        await sendSms({
-          to: from,
-          text: "Elite Kutz: This number is not recognized for barber controls."
-        });
-        return res.json({ ok: true });
-      }
+  if (!barberName) {
+    await sendSms({ to: from, text: "Elite Kutz: This number is not recognized for barber controls." });
+    return res.json({ ok: true });
+  }
 
-      const status = (norm === "AVAILABLE") ? "available" : "unavailable";
-      await notifyKioskBarberStatus(barberName, status);
+  const status = (norm === "AVAILABLE") ? "available" : "unavailable";
 
-      await sendSms({
-        to: from,
-        text: `Elite Kutz: ${barberName} set to ${status.toUpperCase()}.`
-      });
+  console.log("Inbound flip request from SMS ->", { from: fromNormalized, barberName, status });
 
-      return res.json({ ok: true });
-    }
+  const result = await notifyKioskBarberStatus(barberName, status);
+  console.log("Flip result:", result);
+
+  await sendSms({ to: from, text: `Elite Kutz: ${barberName} set to ${status.toUpperCase()}.` });
+  return res.json({ ok: true });
+}
 
     // Default friendly auto-reply (keep only one)
     await sendSms({
