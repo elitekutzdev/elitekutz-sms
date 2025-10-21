@@ -488,7 +488,7 @@ function requireKioskAuth(req, res, next) {
 
 // --- Notify kiosk (PHP proxy) to flip a barber's status ---
 async function notifyKioskBarberStatus(name, status) {
-  const url = "https://elitekutzkiosk.com/kiosk-api.php?endpoint=barber_status";
+ const url = "https://elitekutzkiosk.com/kiosk-api.php?endpoint=push_command";
   const auth = "Bearer " + String(process.env.KIOSK_TOKEN || "");
   try {
     console.log("notifyKioskBarberStatus ->", { name, status, url });
@@ -499,8 +499,12 @@ async function notifyKioskBarberStatus(name, status) {
         "Content-Type": "application/json",
         "Authorization": auth
       },
-      body: JSON.stringify({ name, status })
-    });
+  body: JSON.stringify({
+    type: "barber_status",
+    name,
+    status: String(status).toLowerCase()   // 'available' | 'unavailable'
+  })
+});
 
     const text = await r.text(); // read body either way
     if (!r.ok) {
