@@ -57,6 +57,51 @@ const BARBER_NUMBERS = Object.fromEntries(
   Object.entries(RAW_BARBER_NUMBERS).map(([k, v]) => [normalizeUS(k), v])
 );
 
+async function lookupBarberByPhoneLive(phone) {
+  const normalized = normalizeUS(phone);
+  if (!normalized) return null;
+
+  try {
+    const url =
+      "https://elitekutzkiosk.com/kiosk-api.php?endpoint=barber-lookup-by-phone"
+      + "&phone=" + encodeURIComponent(normalized)
+      + "&token=" + encodeURIComponent(String(process.env.KIOSK_TOKEN || ""));
+
+    console.log("lookupBarberByPhoneLive ->", { phone: normalized, url });
+
+    const r = await fetch(url, {
+      method: "GET",
+      headers: {
+        "Accept": "application/json"
+      }
+    });
+
+    const text = await r.text();
+
+    if (!r.ok) {
+      console.warn("lookupBarberByPhoneLive FAIL", r.status, text);
+      return null;
+    }
+
+    let j = null;
+    try { j = JSON.parse(text); } catch (_) {}
+
+    if (!j || j.ok !== true || !j.barber) {
+      console.warn("lookupBarberByPhoneLive bad payload", text);
+      return null;
+    }
+
+    return {
+      id: String(j.barber.id || "").trim(),
+      name: String(j.barber.name || "").trim(),
+      phone: String(j.barber.phone || "").trim(),
+      active: !!j.barber.active
+    };
+  } catch (e) {
+    console.warn("lookupBarberByPhoneLive ERROR", e);
+    return null;
+  }
+}
 /* ===== REPLACEMENT ENDS HERE ===== */
 
 // sanity checks (prints once at boot so mistakes are obvious)
@@ -590,21 +635,32 @@ app.post("/webhooks/infobip/inbound-sms", async (req, res) => {
 // --- BARBER AVAILABILITY VIA SMS ---
 if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
   const fromNormalized = normalizeUS(from);
-  const barberName = BARBER_NUMBERS[fromNormalized];
+  const barber = await lookupBarberByPhoneLive(fromNormalized);
 
-  if (!barberName) {
-    await sendSms({ to: from, text: "Elite Kutz: This number is not recognized for barber controls." });
+  if (!barber || !barber.id) {
+    await sendSms({
+      to: from,
+      text: "Elite Kutz: This number is not recognized for barber controls."
+    });
     return res.json({ ok: true });
   }
 
   const status = (norm === "AVAILABLE") ? "available" : "unavailable";
 
-  console.log("Inbound flip request from SMS ->", { from: fromNormalized, barberName, status });
+  console.log("Inbound flip request from SMS ->", {
+    from: fromNormalized,
+    barberId: barber.id,
+    barberName: barber.name,
+    status
+  });
 
-  const result = await notifyKioskBarberStatus(barberName, status);
+  const result = await notifyKioskBarberStatus(barber.id, status);
   console.log("Flip result:", result);
 
-  await sendSms({ to: from, text: `Elite Kutz: ${barberName} set to ${status.toUpperCase()}.` });
+  await sendSms({
+    to: from,
+    text: `Elite Kutz: ${barber.name} set to ${status.toUpperCase()}.`
+  });
   return res.json({ ok: true });
 }
 
