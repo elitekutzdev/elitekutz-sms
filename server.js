@@ -637,7 +637,7 @@ if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
   const fromNormalized = normalizeUS(from);
   const barber = await lookupBarberByPhoneLive(fromNormalized);
 
-  if (!barber || !barber.id) {
+  if (!barber || !barber.name) {
     await sendSms({
       to: from,
       text: "Elite Kutz: This number is not recognized for barber controls."
@@ -646,20 +646,21 @@ if (norm === "AVAILABLE" || norm === "UNAVAILABLE") {
   }
 
   const status = (norm === "AVAILABLE") ? "available" : "unavailable";
+  const barberName = String(barber.name || "").trim();
 
   console.log("Inbound flip request from SMS ->", {
     from: fromNormalized,
     barberId: barber.id,
-    barberName: barber.name,
+    barberName,
     status
   });
 
-  const result = await notifyKioskBarberStatus(barber.id, status);
+  const result = await notifyKioskBarberStatus(barberName, status);
   console.log("Flip result:", result);
 
   await sendSms({
     to: from,
-    text: `Elite Kutz: ${barber.name} set to ${status.toUpperCase()}.`
+    text: `Elite Kutz: ${barberName} set to ${status.toUpperCase()}.`
   });
   return res.json({ ok: true });
 }
