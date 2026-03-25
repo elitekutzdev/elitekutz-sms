@@ -709,6 +709,43 @@ app.post("/api/send-assignment", requireKioskAuth, async (req, res) => {
   }
 });
 
+app.post('/api/send-feedback', requireKioskAuth, async (req, res) => {
+  try {
+    const to = String(req.body?.to || '').trim();
+    const client = String(req.body?.client || 'Client').trim();
+    const barber = String(req.body?.barber || '').trim();
+    const token = String(req.body?.token || '').trim();
+    const link = String(req.body?.link || '').trim();
+
+    if (!to || !barber || !token || !link) {
+      return res.status(400).json({ ok: false, error: 'Missing to, barber, token, or link' });
+    }
+
+    const msg =
+`Thanks for visiting Elite Kutz today!
+
+Tap here to rate your experience:
+${link}`;
+
+    const result = await sendSms({
+      to,
+      text: msg
+    });
+
+    res.json({
+      ok: true,
+      to,
+      barber,
+      token,
+      sid: result?.sid || null
+    });
+
+  } catch (err) {
+    console.error("send-feedback failed:", err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 // --- Kiosk-triggered: removed from waitlist ---
 app.post("/api/send-removed", requireKioskAuth, async (req, res) => {
   try {
