@@ -735,16 +735,47 @@ app.post("/api/send-position", requireKioskAuth, async (req, res) => {
     }
 
     const pos = Number(position);
+
     const result = await sendSms({
       to,
       text:
-        `Elite Kutz: You’re #${pos} in line. Keep your phone nearby—reply STOP to opt out, HELP for help, START to rejoin.`
+        `Elite Kutz: You're #${pos} in line. Keep your phone nearby—reply STOP to opt out, HELP for help, START to rejoin.`
     });
+
     res.json({ ok: true, result });
+
   } catch (e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+
+
+// --- Kiosk-triggered: feedback review link ---
+app.post("/api/send-feedback", requireKioskAuth, async (req, res) => {
+  try {
+
+    const { to, client, barber, link } = req.body || {};
+
+    if (!to || !barber || !link) {
+      return res.status(400).json({ ok: false, error: "Missing to/barber/link" });
+    }
+
+const result = await sendSms({
+  to,
+  text:
+    `Elite Kutz: How was your service with ${barber}? ` +
+    `Leave feedback: ${link} ` +
+    `Reply STOP to opt out, HELP for help, START to rejoin.`
+});
+
+    res.json({ ok: true, result });
+
+  } catch (e) {
+    console.error("send-feedback error:", e);
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // --- Kiosk fan-out endpoint: one event -> many SMS ---
 app.post("/events", requireKioskAuth, async (req, res) => {
   try {
