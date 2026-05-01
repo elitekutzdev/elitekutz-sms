@@ -709,6 +709,25 @@ app.post("/api/send-assignment", requireKioskAuth, async (req, res) => {
   }
 });
 
+app.post("/api/send-custom", requireKioskAuth, async (req, res) => {
+  try {
+    const { to, message } = req.body || {};
+
+    if (!to || !message) {
+      return res.status(400).json({ ok: false, error: "Missing to/message" });
+    }
+
+    const result = await sendSms({
+      to,
+      text: String(message)
+    });
+
+    res.json({ ok: true, result });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // --- Kiosk-triggered: removed from waitlist ---
 app.post("/api/send-removed", requireKioskAuth, async (req, res) => {
   try {
