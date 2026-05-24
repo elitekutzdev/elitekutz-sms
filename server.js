@@ -476,10 +476,43 @@ function planMessages(type, payload) {
   }
 }
 
+// --- util: validate Infobip accepted the outbound message ---
+function assertInfobipAccepted(bodyText) {
+  let parsed;
+  try {
+    parsed = JSON.parse(bodyText);
+  } catch {
+    throw new Error("Infobip returned non-JSON body");
+  }
+
+  const msgs = parsed?.messages;
+  if (!Array.isArray(msgs) || msgs.length === 0) {
+    throw new Error("Infobip response missing messages[]");
+  }
+
+  const rejected = msgs.filter((m) => {
+    const groupId = Number(m?.status?.groupId);
+    // 2=UNDELIVERABLE, 4=EXPIRED, 5=REJECTED
+    return groupId === 2 || groupId === 4 || groupId === 5;
+  });
+
+  if (rejected.length) {
+    const detail = rejected
+      .map((m) => m?.status?.description || m?.status?.name || "REJECTED")
+      .join("; ");
+    throw new Error(`Infobip rejected message: ${detail}`);
+  }
+
+  return parsed;
+}
+
 // --- util: send SMS via Infobip (strong logging) ---
 async function sendSms({ to, text }) {
   try {
-    console.log("-> sending SMS", { to, from: SENDER, preview: text.slice(0, 80) });
+    const toNorm = normalizeUS(to);
+    if (!toNorm) throw new Error("Missing/invalid destination phone");
+
+    console.log("-> sending SMS", { to: toNorm, from: SENDER, preview: text.slice(0, 80) });
 
     const res = await fetch(`${BASE_URL}/sms/2/text/advanced`, {
       method: "POST",
@@ -489,18 +522,19 @@ async function sendSms({ to, text }) {
         Accept: "application/json",
       },
       body: JSON.stringify({
-        messages: [{ destinations: [{ to }], from: SENDER, text }],
+        messages: [{ destinations: [{ to: toNorm }], from: SENDER, text }],
       }),
     });
 
     const bodyText = await res.text();
     if (!res.ok) {
       console.error(`<- Infobip ERROR ${res.status}: ${bodyText}`);
-      throw new Error(`Infobip ${res.status}`);
+      throw new Error(`Infobip HTTP ${res.status}: ${bodyText}`);
     }
 
+    const parsed = assertInfobipAccepted(bodyText);
     console.log("<- Infobip OK", bodyText);
-    try { return JSON.parse(bodyText); } catch { return bodyText; }
+    return parsed;
   } catch (err) {
     console.error("sendSms() failed:", err);
     throw err;
@@ -511,7 +545,7 @@ async function sendSms({ to, text }) {
 app.get("/health", (_req, res) => res.json({ ok: true }));
 app.get("/", (_req, res) => res.send("OK"));
 
-const BUILD_TAG = "flip-route-" + new Date().toISOString();
+const BUILD_TAG = "feedback-sms-" + new Date().toISOString();
 app.get("/_ping", (_req, res) => res.send(BUILD_TAG));
 console.log("Booting build:", BUILD_TAG);
 
@@ -771,27 +805,45 @@ app.post("/api/send-position", requireKioskAuth, async (req, res) => {
 
 // --- Kiosk-triggered: feedback review link ---
 app.post("/api/send-feedback", requireKioskAuth, async (req, res) => {
+  const started = Date.now();
+  const { to, client, barber, link, token } = req.body || {};
+  const toNorm = normalizeUS(to);
+
+  console.log("[send-feedback] request", {
+    to: toNorm,
+    client: client || null,
+    barber,
+    token: token || null,
+    link,
+  });
+
+  if (!toNorm || !barber || !link) {
+    return res.status(400).json({ ok: false, error: "Missing to/barber/link" });
+  }
+
   try {
+    const text =
+      `Elite Kutz: How was your service with ${barber}? ` +
+      `Leave feedback: ${link} ` +
+      `Reply STOP to opt out, HELP for help, START to rejoin.`;
 
-    const { to, client, barber, link } = req.body || {};
+    const result = await sendSms({ to: toNorm, text });
 
-    if (!to || !barber || !link) {
-      return res.status(400).json({ ok: false, error: "Missing to/barber/link" });
-    }
+    console.log("[send-feedback] infobip accepted", {
+      to: toNorm,
+      token: token || null,
+      ms: Date.now() - started,
+    });
 
-const result = await sendSms({
-  to,
-  text:
-    `Elite Kutz: How was your service with ${barber}? ` +
-    `Leave feedback: ${link} ` +
-    `Reply STOP to opt out, HELP for help, START to rejoin.`
-});
-
-    res.json({ ok: true, result });
-
+    return res.json({ ok: true, to: toNorm, result });
   } catch (e) {
-    console.error("send-feedback error:", e);
-    res.status(500).json({ ok: false, error: e.message });
+    console.error("[send-feedback] failed", {
+      to: toNorm,
+      token: token || null,
+      err: e.message,
+      ms: Date.now() - started,
+    });
+    return res.status(502).json({ ok: false, error: e.message });
   }
 });
 
