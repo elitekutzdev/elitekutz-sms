@@ -806,8 +806,9 @@ app.post("/api/send-position", requireKioskAuth, async (req, res) => {
 // --- Kiosk-triggered: feedback review link ---
 app.post("/api/send-feedback", requireKioskAuth, async (req, res) => {
   const started = Date.now();
-  const { to, client, barber, link, token } = req.body || {};
+  const { to, client, barber, link, token, message } = req.body || {};
   const toNorm = normalizeUS(to);
+  const customMessage = typeof message === "string" ? message.trim() : "";
 
   console.log("[send-feedback] request", {
     to: toNorm,
@@ -815,6 +816,7 @@ app.post("/api/send-feedback", requireKioskAuth, async (req, res) => {
     barber,
     token: token || null,
     link,
+    customMessage: customMessage !== "",
   });
 
   if (!toNorm || !barber || !link) {
@@ -822,10 +824,11 @@ app.post("/api/send-feedback", requireKioskAuth, async (req, res) => {
   }
 
   try {
-    const text =
-      `Elite Kutz: How was your service with ${barber}? ` +
-      `Leave feedback: ${link} ` +
-      `Reply STOP to opt out, HELP for help, START to rejoin.`;
+    const text = customMessage !== ""
+      ? customMessage
+      : `Elite Kutz: How was your service with ${barber}? ` +
+        `Leave feedback: ${link} ` +
+        `Reply STOP to opt out, HELP for help, START to rejoin.`;
 
     const result = await sendSms({ to: toNorm, text });
 
